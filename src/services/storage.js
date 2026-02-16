@@ -23,12 +23,23 @@ export class StorageService {
 
   /**
    * Retrieves all tasks from localStorage
+   * T070: Enhanced error handling with corrupted data recovery
    * @returns {Array<Object>} Array of task objects (may be empty)
    */
   getTasks() {
     try {
       const data = localStorage.getItem(this.tasksKey);
-      return data ? JSON.parse(data) : [];
+      if (!data) return [];
+
+      // T070: Try to parse, recover from corruption
+      try {
+        return JSON.parse(data);
+      } catch (parseError) {
+        console.error('Corrupted tasks data detected, clearing and reinitializing:', parseError);
+        // Clear corrupted data
+        localStorage.removeItem(this.tasksKey);
+        return [];
+      }
     } catch (error) {
       console.error('Error reading tasks from localStorage:', error);
       return [];
@@ -47,10 +58,20 @@ export class StorageService {
 
   /**
    * Persists an array of tasks to localStorage
+   * T069: Enhanced with QuotaExceededError handling
    * @param {Array<Object>} tasks - Array of task objects to persist
+   * @throws {Error} If storage quota exceeded
    */
   saveTasks(tasks) {
-    localStorage.setItem(this.tasksKey, JSON.stringify(tasks));
+    try {
+      localStorage.setItem(this.tasksKey, JSON.stringify(tasks));
+    } catch (error) {
+      if (error.name === 'QuotaExceededError') {
+        console.error('localStorage quota exceeded. Unable to save tasks.');
+        throw new Error('Storage quota exceeded. Please delete some tasks or export your data.');
+      }
+      throw error;
+    }
   }
 
   /**
@@ -163,6 +184,7 @@ export class StorageService {
 
   /**
    * Retrieves all categories from localStorage
+   * T070: Enhanced error handling with corrupted data recovery
    * @returns {Array<Object>} Array of category objects
    */
   getCategories() {
@@ -170,7 +192,17 @@ export class StorageService {
       const data = localStorage.getItem(this.categoriesKey);
 
       if (data) {
-        return JSON.parse(data);
+        // T070: Try to parse, recover from corruption
+        try {
+          return JSON.parse(data);
+        } catch (parseError) {
+          console.error('Corrupted categories data detected, reinitializing with defaults:', parseError);
+          // Clear corrupted data and reinitialize
+          localStorage.removeItem(this.categoriesKey);
+          const defaultCategories = this.getDefaultCategories();
+          this.saveCategories(defaultCategories);
+          return defaultCategories;
+        }
       }
 
       // Initialize with default categories if none exist
@@ -196,10 +228,20 @@ export class StorageService {
 
   /**
    * Persists an array of categories to localStorage
+   * T069: Enhanced with QuotaExceededError handling
    * @param {Array<Object>} categories - Array of category objects to persist
+   * @throws {Error} If storage quota exceeded
    */
   saveCategories(categories) {
-    localStorage.setItem(this.categoriesKey, JSON.stringify(categories));
+    try {
+      localStorage.setItem(this.categoriesKey, JSON.stringify(categories));
+    } catch (error) {
+      if (error.name === 'QuotaExceededError') {
+        console.error('localStorage quota exceeded. Unable to save categories.');
+        throw new Error('Storage quota exceeded. Please export your data or clear browser storage.');
+      }
+      throw error;
+    }
   }
 
   /**
@@ -336,5 +378,101 @@ export class StorageService {
       new Category({ name: 'Shopping', description: 'Shopping lists and purchases' }).toJSON(),
       new Category({ name: 'Health', description: 'Health and wellness tasks' }).toJSON()
     ];
+  }
+
+  // ========== DATA EXPORT/IMPORT (T096, T097) ==========
+
+  /**
+   * T096: Exports all data (tasks and categories) as JSON
+   * @returns {Object} Object containing tasks and categories arrays with metadata
+   */
+  exportData() {
+    const tasks = this.getTasks();
+    const categories = this.getCategories();
+
+    return {
+      version: '1.0',
+      exportDate: new Date().toISOString(),
+      data: {
+        tasks,
+        categories
+      }
+    };
+  }
+
+  /**
+   * T096: Exports data and triggers browser download
+   * @param {string} [filename] - Optional custom filename
+   */
+  downloadExport(filename) {
+    const data = this.exportData();
+    const json = JSON.stringify(data, null, 2);
+    const blob = new Blob([json], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+
+    const defaultFilename = `supertodo-backup-${new Date().toISOString().split('T')[0]}.json`;
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = filename || defaultFilename;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+  }
+
+  /**
+   * T097: Imports data from JSON with validation
+   * @param {Object} data - Import data object
+   * @throws {Error} If data is invalid or corrupted
+   * @returns {Object} Summary of imported data
+   */
+  importData(data) {
+    // Validate data structure
+    if (!data || typeof data !== 'object') {
+      throw new Error('Invalid import data: must be an object');
+    }
+
+    if (!data.data || typeof data.data !== 'object') {
+      throw new Error('Invalid import data: missing data property');
+    }
+
+    const { tasks = [], categories = [] } = data.data;
+
+    // Validate tasks array
+    if (!Array.isArray(tasks)) {
+      throw new Error('Invalid import data: tasks must be an array');
+    }
+
+    // Validate categories array
+    if (!Array.isArray(categories)) {
+      throw new Error('Invalid import data: categories must be an array');
+    }
+
+    // Validate each task
+    tasks.forEach((task, index) => {
+      try {
+        Task.validate(task);
+      } catch (error) {
+        throw new Error(`Invalid task at index ${index}: ${error.message}`);
+      }
+    });
+
+    // Validate each category
+    categories.forEach((category, index) => {
+      try {
+        Category.validate(category);
+      } catch (error) {
+        throw new Error(`Invalid category at index ${index}: ${error.message}`);
+      }
+    });
+
+    // If validation passes, save the data
+    this.saveTasks(tasks);
+    this.saveCategories(categories);
+
+    return {
+      tasksImported: tasks.length,
+      categoriesImported: categories.length
+    };
   }
 }

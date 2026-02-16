@@ -33,3 +33,9 @@ Thumbs.db
 # Temporary files
 *.tmp
 *.swp
+
+# Deployment artifacts
+.netlify/
+
+# Claude Code local settings
+.claude/settings.local.json
